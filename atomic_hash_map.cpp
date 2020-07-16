@@ -64,9 +64,66 @@ public:
         iterator;
 
 public:
+    const float kGrowthFrac_; // How much to grow when we run out of capacity.
+
+    explicit AtomicHashmap(size_t finalSizeEst, const Config& c = Config());
+
+    AtomicHashMap(const AtomicHashMap&) = delete;
+    AtomicHashMap& operator=(const AtomicHashMap&) = delete;
+
+    ~AtomicHashMap() {
+        const unsigned int numMaps = 
+            numMapsAllocated_.load(std::memory_order_relaxed);
+        FOR_EACH_RANGE (i, 0, numMaps) {
+            SubMap* thisMap = subMaps_[i].load(std::memory_order_relaxed);
+            DCHECK(thisMap);
+            SubMap::destory(thisMap);
+        }
+    }
+
+    key_equal key_eq() const {
+        return key_equal();
+    }
+    hasher hash_function() const {
+        return hasher();
+    }
+
+private:
+    static const uint32_t kNumSubMapBits_ = 4;
+    static const uint32_t kSecondaryMapBit_ = 1u << 31; 
+    static const uint32_t kSubMapIndexShift_ = 32 - kNumSubMapBits_ - 1;
+    static const uint32_t kSubMapIndexMask_ = (1 << kSubMapIndexShift_) -1;
+    static const uintptr_t kLockedPtr_ = 0x88ULL << 48; // invalid pointer
+
+    struct SimpleRetT {
+        uint32_t i;
+        size_t j;
+        bool success;
+        SimpleRetT(uint32_t ii, size_t jj, bool s) : i(ii), j(jj), success(s) {}
+        SimpleRetT() = default;
+    };
+
+    template<
+        typename LookupKeyT = key_type,
+        typename LookupHashFcn = hasher,
+        typename LookupEqualFcn = key_equal,
+        typename LookupKeyToKeyFcn = key_convert,
+        typename... ArgTs>
+    SimpleRetT insertInternal(LookupKey key, ArgTs&&... value);
+
+    std::atomic<SubMap*> subMaps_[kNumSubMaps_];
+    std::atomic<uint32_t> numMapsAllocated_;
+
+    inline bool tryLockMap(unsigned int idx) {
+        SubMap* val = nullptr;
+        return subMaps_[idx].compare_exchange_strong(
+                val, (SubMap*)kLockedPtr_, std::memory_order_acquire);
+    }
+
+    static inline uint32_t encodeIndex(uint32_t subMap, uint32_t subMapIdx);
 
 };  // AtomicHashMap
 
 }  // namespace folly
 
-#include <folly/AtomicHashMap-inl.h>
+#include <folly/atomic_hash_map_inl.h>
